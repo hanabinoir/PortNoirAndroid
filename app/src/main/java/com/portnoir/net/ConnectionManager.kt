@@ -157,6 +157,65 @@ class ConnectionManager(
         }
     }
 
+    fun sendImage(macId: String, source: File, name: String, mime: String) {
+        scope.launch {
+            val mac = repo.mac(macId)
+            if (mac == null) {
+                source.delete()
+                return@launch
+            }
+            val blobId = UUID.randomUUID().toString().replace("-", "")
+            val destination = File(context.filesDir, "outgoing/$blobId").apply {
+                parentFile?.mkdirs()
+            }
+            var copied = false
+            try {
+                source.inputStream().use { input ->
+                    destination.outputStream().use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var total = 0L
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            if (total > 50L * 1024 * 1024) {
+                                throw IOException("Images must be 50 MB or smaller")
+                            }
+                            output.write(buffer, 0, count)
+                        }
+                    }
+                }
+                copied = true
+            } catch (error: IOException) {
+                messages.insert(ChatMessage(
+                    id = blobId, macId = macId, direction = "outgoing", type = "chat.file",
+                    timestamp = System.currentTimeMillis(), name = File(name).name, mime = mime,
+                    transferState = "failed: ${error.message ?: "cannot read image"}",
+                ))
+                return@launch
+            } finally {
+                source.delete()
+                if (!copied) destination.delete()
+            }
+            val message = ChatMessage(
+                id = blobId,
+                macId = macId,
+                direction = "outgoing",
+                type = "chat.file",
+                timestamp = System.currentTimeMillis(),
+                name = File(name).name,
+                mime = mime,
+                size = destination.length(),
+                blob = blobId,
+                transferState = "queued",
+                localPath = destination.absolutePath,
+            )
+            messages.insert(message)
+            sockets[macId]?.send(messageJson(message).toString())
+            uploadFile(mac, message)
+        }
+    }
+
     /** First-time pairing with the host and port from the Mac's QR code. */
     suspend fun pair(p: PairingPayload): Result<PairedMac> = runCatching {
         check(isWifiConnected(context)) { "Wi-Fi is off. Connect to the same network as your Mac" }

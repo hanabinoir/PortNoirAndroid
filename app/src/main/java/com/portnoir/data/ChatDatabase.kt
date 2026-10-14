@@ -1,6 +1,7 @@
 package com.portnoir.data
 
 import android.content.Context
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -11,6 +12,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Entity(
@@ -31,6 +34,7 @@ data class ChatMessage(
     val delivered: Boolean = false,
     val transferState: String = "",
     val localPath: String = "",
+    @ColumnInfo(defaultValue = "''") val locationUri: String = "",
 )
 
 @Dao
@@ -65,6 +69,9 @@ interface ChatMessageDao {
     @Query("UPDATE chat_messages SET transferState = :state, localPath = :path WHERE id = :messageId")
     suspend fun setTransfer(messageId: String, state: String, path: String)
 
+    @Query("UPDATE chat_messages SET locationUri = :uri WHERE id = :messageId")
+    suspend fun setLocationUri(messageId: String, uri: String)
+
     @Query("SELECT * FROM chat_messages WHERE macId = :macId AND direction = 'outgoing' AND type = 'chat.file' AND transferState != 'complete'")
     suspend fun pendingUploads(macId: String): List<ChatMessage>
 
@@ -72,11 +79,19 @@ interface ChatMessageDao {
     suspend fun pendingDownloads(macId: String): List<ChatMessage>
 }
 
-@Database(entities = [ChatMessage::class], version = 1, exportSchema = false)
+@Database(entities = [ChatMessage::class], version = 2, exportSchema = false)
 abstract class ChatDatabase : RoomDatabase() {
     abstract fun messages(): ChatMessageDao
 
     companion object {
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE chat_messages ADD COLUMN locationUri TEXT NOT NULL DEFAULT ''",
+                )
+            }
+        }
+
         @Volatile private var instance: ChatDatabase? = null
 
         fun get(context: Context): ChatDatabase =
@@ -85,7 +100,7 @@ abstract class ChatDatabase : RoomDatabase() {
                     context.applicationContext,
                     ChatDatabase::class.java,
                     "portnoir-chat.db",
-                ).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
             }
     }
 }
