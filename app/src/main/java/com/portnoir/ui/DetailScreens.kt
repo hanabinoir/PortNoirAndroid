@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -31,9 +32,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.portnoir.PortNoirApp
 import com.portnoir.data.ChatMessage
+import com.portnoir.net.ConnState
 import java.io.File
 import android.widget.Toast
 
@@ -54,7 +58,7 @@ fun DetailScaffold(title: String, onBack: () -> Unit, content: @Composable Colum
 }
 
 @Composable
-private fun Row2(title: String, subtitle: String) = ListItem(
+private fun ItemRow(title: String, subtitle: String) = ListItem(
     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
     headlineContent = { Text(title) },
     supportingContent = { Text(subtitle) },
@@ -66,9 +70,14 @@ fun ChatHistoryScreen(macId: String, onBack: () -> Unit) {
     val app = LocalContext.current.applicationContext as PortNoirApp
     val context = LocalContext.current
     val name = app.repo.mac(macId)?.name ?: "Mac"
+    val states by app.connections.states.collectAsStateWithLifecycle()
+    val connected = states[macId] == ConnState.CONNECTED
     val messages by app.chatDatabase.messages().observe(macId)
         .collectAsStateWithLifecycle(initialValue = emptyList())
     var draft by remember { mutableStateOf("") }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        app.connections.reconnect(macId)
+    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {
             val cursor = context.contentResolver.query(uri, null, null, null, null)
@@ -86,7 +95,24 @@ fun ChatHistoryScreen(macId: String, onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(name) },
+                title = {
+                    Column {
+                        Text(name)
+                        if (!connected) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(
+                                    Icons.Outlined.CloudOff,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Text("Offline", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -182,8 +208,28 @@ private fun ChatBubble(message: ChatMessage) {
             } else {
                 Text(message.body)
                 if (outgoing && !message.delivered) {
-                    Text("Sending", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (message.transferState == "pending") {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "Pending",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            TextButton(
+                                onClick = {
+                                    (context.applicationContext as PortNoirApp)
+                                        .connections.recall(message.macId, message.id)
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            ) {
+                                Text("Recall")
+                            }
+                        }
+                    } else {
+                        Text("Sending", style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }
@@ -196,28 +242,28 @@ fun SettingsDetailScreen(key: String, onBack: () -> Unit) {
     DetailScaffold(item?.title ?: "Settings", onBack) {
         when (item) {
             SettingsItem.FEATURES -> {
-                Row2("Port", "Chat and file sharing. Needs no extra permission.")
-                Row2("Pictures", "Photo access is requested when this feature ships.")
-                Row2("SMS", "Optional. Needs SMS permissions.")
-                Row2("Calls", "Optional. Needs phone permissions. Call audio stays on the phone.")
-                Row2("Camera", "Used only to scan the pairing code.")
-                Row2("Notifications", "Shows that PortNoir is keeping your Mac connected.")
+                ItemRow("Port", "Chat and file sharing. Needs no extra permission.")
+                ItemRow("Pictures", "Photo access is requested when this feature ships.")
+                ItemRow("SMS", "Optional. Needs SMS permissions.")
+                ItemRow("Calls", "Optional. Needs phone permissions. Call audio stays on the phone.")
+                ItemRow("Camera", "Used only to scan the pairing code.")
+                ItemRow("Notifications", "Shows that PortNoir is keeping your Mac connected.")
             }
             SettingsItem.ADVANCED -> {
-                Row2("Battery optimisation", "Exempting PortNoir keeps the connection alive in the background. Coming soon.")
-                Row2("Connection", "Searches your Wi-Fi for the Mac, then retries every 1 to 30 seconds.")
+                ItemRow("Battery optimisation", "Exempting PortNoir keeps the connection alive in the background. Coming soon.")
+                ItemRow("Connection", "Searches for paired PCs once when the app resumes. Offline PCs are not retried until the next resume.")
             }
             SettingsItem.ABOUT -> {
                 val ctx = LocalContext.current
                 val version = runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "?"
-                Row2("PortNoir", "Version $version")
-                Row2("Protocol", "Version 1")
+                ItemRow("PortNoir", "Version $version")
+                ItemRow("Protocol", "Version 1")
             }
             SettingsItem.LICENCES -> {
-                Row2("AndroidX and Jetpack Compose", "Apache License 2.0")
-                Row2("OkHttp", "Apache License 2.0")
-                Row2("ML Kit Barcode Scanning", "Google ML Kit terms")
-                Row2("Material Icons", "Apache License 2.0")
+                ItemRow("AndroidX and Jetpack Compose", "Apache License 2.0")
+                ItemRow("OkHttp", "Apache License 2.0")
+                ItemRow("ML Kit Barcode Scanning", "Google ML Kit terms")
+                ItemRow("Material Icons", "Apache License 2.0")
             }
             else -> {}
         }

@@ -75,7 +75,7 @@ fun StatusDot(state: ConnState?) {
 
 fun ConnState?.label(): String = when (this) {
     ConnState.CONNECTED -> "Connected"
-    ConnState.DISCOVERING -> "Searching for your Mac"
+    ConnState.DISCOVERING -> "Searching for paired PCs"
     ConnState.CONNECTING -> "Connecting"
     ConnState.AUTHENTICATING -> "Signing in"
     else -> "Offline"

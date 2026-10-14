@@ -32,9 +32,8 @@ class MainActivity : ComponentActivity() {
         setContent { PortNoirTheme { PortNoirNav() } }
     }
 
-    override fun onStart() {
-        super.onStart()
-        // Re-kick the connection loops every time the app comes to the foreground.
+    override fun onResume() {
+        super.onResume()
         if ((application as PortNoirApp).repo.macs.value.isNotEmpty()) ConnectionService.start(this)
     }
 }

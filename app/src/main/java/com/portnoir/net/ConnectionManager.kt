@@ -1,8 +1,6 @@
 package com.portnoir.net
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
 import android.os.Build
 import android.os.Environment
 import android.util.Log
@@ -33,9 +31,7 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 
 /**
- * One supervisor loop per paired Mac:
- * DISCOVERING (mDNS, falls back to last address) -> CONNECTING -> AUTHENTICATING -> CONNECTED,
- * then back to DISCONNECTED and a retry with backoff (1, 2, 5, 10, 30 s).
+ * One discovery pass per foreground resume, followed by one connection attempt for each paired Mac.
  */
 class ConnectionManager(
     private val context: Context,
@@ -43,28 +39,42 @@ class ConnectionManager(
     private val messages: ChatMessageDao,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val discovery = MacDiscovery(context)
+    private val discovery = PcDiscovery(context)
     private val jobs = ConcurrentHashMap<String, Job>()
     private val sockets = ConcurrentHashMap<String, WebSocket>()
-    private val kickGeneration = MutableStateFlow(0)
-    private val retryWindowMs = 30_000L
-    private val retryPauseMs = 2_000L
-    private var watchingNetwork = false
+    private var discoveryJob: Job? = null
 
     private val _states = MutableStateFlow<Map<String, ConnState>>(emptyMap())
     val states: StateFlow<Map<String, ConnState>> = _states.asStateFlow()
 
-    private fun kick() = kickGeneration.update { it + 1 }
-
+    @Synchronized
     fun start() {
-        repo.macs.value.forEach(::ensureLoop)
-        kick()
-        if (!watchingNetwork) {
-            watchingNetwork = true
-            val cm = context.getSystemService(ConnectivityManager::class.java)
-            cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) { kick() }
-            })
+        if (discoveryJob?.isActive == true) return
+        val paired = repo.macs.value.filterNot { jobs[it.id]?.isActive == true }
+        if (paired.isEmpty()) return
+        discoveryJob = scope.launch {
+            if (!isWifiConnected(context)) {
+                paired.forEach { setState(it.id, ConnState.DISCONNECTED) }
+                return@launch
+            }
+            paired.forEach { setState(it.id, ConnState.DISCOVERING) }
+            val found = discovery.findAll(paired.mapTo(mutableSetOf()) { it.id }, 3_000)
+            paired.forEach { mac -> ensureAttempt(mac, found[mac.id]) }
+        }
+    }
+
+    @Synchronized
+    fun reconnect(macId: String) {
+        if (discoveryJob?.isActive == true || jobs[macId]?.isActive == true) return
+        val mac = repo.mac(macId) ?: return
+        discoveryJob = scope.launch {
+            if (!isWifiConnected(context)) {
+                setState(macId, ConnState.DISCONNECTED)
+                return@launch
+            }
+            setState(macId, ConnState.DISCOVERING)
+            val found = discovery.findAll(setOf(macId), 3_000)[macId]
+            ensureAttempt(mac, found)
         }
     }
 
@@ -85,10 +95,21 @@ class ConnectionManager(
                 type = "chat.text",
                 timestamp = System.currentTimeMillis(),
                 body = body,
+                transferState = "pending",
             )
             messages.insert(message)
-            sockets[macId]?.send(messageJson(message).toString())
+            sockets[macId]?.let { webSocket ->
+                if (messages.markTextSending(macId, message.id) > 0 &&
+                    !webSocket.send(messageJson(message).toString())
+                ) {
+                    messages.markTextPending(macId, message.id)
+                }
+            }
         }
+    }
+
+    fun recall(macId: String, messageId: String) {
+        scope.launch { messages.recallPendingText(macId, messageId) }
     }
 
     fun sendFile(macId: String, uri: android.net.Uri, name: String, mime: String) {
@@ -173,7 +194,6 @@ class ConnectionManager(
         try {
             val paired = withTimeout(10_000) { done.await() }
             repo.upsert(paired)
-            ensureLoop(paired)
             paired
         } catch (t: Throwable) {
             ws.cancel()
@@ -181,49 +201,29 @@ class ConnectionManager(
         }
     }
 
-    private fun ensureLoop(mac: PairedMac) {
+    private fun ensureAttempt(mac: PairedMac, found: Pair<String, Int>?) {
         if (jobs[mac.id]?.isActive == true) return
         jobs[mac.id] = scope.launch {
-            var windowStart = System.currentTimeMillis()
-            loop@ while (isActive) {
-                val current = repo.mac(mac.id) ?: break
-                val seen = kickGeneration.value
-                if (!isWifiConnected(context)) {
-                    // No Wi-Fi means the Mac is unreachable; wait for a network change instead of retrying.
-                    setState(mac.id, ConnState.DISCONNECTED)
-                    kickGeneration.first { it != seen }
-                    windowStart = System.currentTimeMillis()
-                    continue@loop
-                }
-                setState(mac.id, ConnState.DISCOVERING)
-                val found = discovery.find(mac.id, 3_000)
-                val candidates = listOfNotNull(
-                    found,
-                    current.lastHost?.let { it to current.lastPort }?.takeIf { it != found },
-                )
-                var authed = false
+            val current = repo.mac(mac.id) ?: return@launch
+            messages.queueUndeliveredTexts(mac.id)
+            val candidates = listOfNotNull(
+                found,
+                current.lastHost?.let { it to current.lastPort }?.takeIf { it != found },
+            )
+            try {
                 for ((host, port) in candidates) {
                     val outcome = connectOnce(current, host, port)
-                    authed = outcome.authed
                     if (outcome.code == Msg.CLOSE_UNAUTHORIZED || outcome.code == Msg.CLOSE_FORGOTTEN) {
                         repo.remove(mac.id)
-                        break@loop
+                        _states.update { it - mac.id }
+                        return@launch
                     }
-                    if (authed) break
+                    if (outcome.authed) return@launch
                 }
-                setState(mac.id, ConnState.DISCONNECTED)
-                if (authed) windowStart = System.currentTimeMillis()
-                val windowOpen = System.currentTimeMillis() - windowStart < retryWindowMs
-                if (windowOpen) {
-                    delay(retryPauseMs)
-                } else {
-                    // One 30 s attempt per trigger; wait for app launch, foreground or network change.
-                    kickGeneration.first { it != seen }
-                    windowStart = System.currentTimeMillis()
-                }
+            } finally {
+                messages.queueUndeliveredTexts(mac.id)
+                if (repo.mac(mac.id) != null) setState(mac.id, ConnState.DISCONNECTED)
             }
-            sockets.remove(mac.id)
-            _states.update { it - mac.id }
         }
     }
 
@@ -260,7 +260,7 @@ class ConnectionManager(
                             scope.launch { replayPending(connected, webSocket) }
                         }
                         "ack" -> scope.launch {
-                            messages.acknowledge(
+                            messages.acknowledgeMessage(
                                 mac.id, message.optString("id", message.optString("message_id")),
                             )
                         }
@@ -302,7 +302,17 @@ class ConnectionManager(
     }
 
     private suspend fun replayPending(mac: PairedMac, webSocket: WebSocket) {
-        messages.pending(mac.id).forEach { webSocket.send(messageJson(it).toString()) }
+        messages.pending(mac.id).forEach { message ->
+            if (message.type == "chat.text") {
+                if (messages.markTextSending(mac.id, message.id) > 0 &&
+                    !webSocket.send(messageJson(message).toString())
+                ) {
+                    messages.markTextPending(mac.id, message.id)
+                }
+            } else {
+                webSocket.send(messageJson(message).toString())
+            }
+        }
         messages.pendingUploads(mac.id).forEach { uploadFile(mac, it) }
         messages.pendingDownloads(mac.id).forEach {
             try {

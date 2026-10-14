@@ -8,7 +8,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 
 /** Looks for paired PCs' mDNS advertisements (`_portnoir._tcp`) on the current Wi-Fi network. */
-class MacDiscovery(context: Context) {
+class PcDiscovery(context: Context) {
     private val nsd = context.getSystemService(Context.NSD_SERVICE) as NsdManager
 
     suspend fun findAll(macIds: Set<String>, timeoutMs: Long): Map<String, Pair<String, Int>> {

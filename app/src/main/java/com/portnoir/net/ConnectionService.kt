@@ -13,7 +13,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.portnoir.PortNoirApp
 
-/** Foreground service that keeps the connection loops alive while the app is in the background. */
+/** Foreground service that keeps authenticated connections alive while the app is in the background. */
 class ConnectionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -32,7 +32,7 @@ class ConnectionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        (application as PortNoirApp).connections.start()
+        if (intent != null) (application as PortNoirApp).connections.start()
         return START_STICKY
     }
 

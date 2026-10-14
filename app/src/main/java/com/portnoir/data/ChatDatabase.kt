@@ -47,8 +47,20 @@ interface ChatMessageDao {
     @Query("SELECT * FROM chat_messages WHERE macId = :macId AND direction = 'outgoing' AND delivered = 0 ORDER BY timestamp")
     suspend fun pending(macId: String): List<ChatMessage>
 
-    @Query("UPDATE chat_messages SET delivered = 1 WHERE macId = :macId AND id = :messageId")
-    suspend fun acknowledge(macId: String, messageId: String)
+    @Query("UPDATE chat_messages SET delivered = 1, transferState = CASE WHEN type = 'chat.text' THEN '' ELSE transferState END WHERE macId = :macId AND id = :messageId")
+    suspend fun acknowledgeMessage(macId: String, messageId: String)
+
+    @Query("UPDATE chat_messages SET transferState = 'sending' WHERE macId = :macId AND id = :messageId AND direction = 'outgoing' AND type = 'chat.text' AND delivered = 0 AND transferState = 'pending'")
+    suspend fun markTextSending(macId: String, messageId: String): Int
+
+    @Query("UPDATE chat_messages SET transferState = 'pending' WHERE macId = :macId AND id = :messageId AND direction = 'outgoing' AND type = 'chat.text' AND delivered = 0 AND transferState = 'sending'")
+    suspend fun markTextPending(macId: String, messageId: String)
+
+    @Query("UPDATE chat_messages SET transferState = 'pending' WHERE macId = :macId AND direction = 'outgoing' AND type = 'chat.text' AND delivered = 0 AND transferState IN ('sending', '')")
+    suspend fun queueUndeliveredTexts(macId: String)
+
+    @Query("DELETE FROM chat_messages WHERE macId = :macId AND id = :messageId AND direction = 'outgoing' AND type = 'chat.text' AND delivered = 0 AND transferState = 'pending'")
+    suspend fun recallPendingText(macId: String, messageId: String): Int
 
     @Query("UPDATE chat_messages SET transferState = :state, localPath = :path WHERE id = :messageId")
     suspend fun setTransfer(messageId: String, state: String, path: String)
