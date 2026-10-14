@@ -42,6 +42,8 @@ class ConnectionManager(
     private val discovery = PcDiscovery(context)
     private val jobs = ConcurrentHashMap<String, Job>()
     private val sockets = ConcurrentHashMap<String, WebSocket>()
+    private val downloadJobs = ConcurrentHashMap<String, Job>()
+    private val manualDownloadCancels = ConcurrentHashMap.newKeySet<String>()
     private var discoveryJob: Job? = null
 
     private val _states = MutableStateFlow<Map<String, ConnState>>(emptyMap())
@@ -110,6 +112,22 @@ class ConnectionManager(
 
     fun recall(macId: String, messageId: String) {
         scope.launch { messages.recallPendingText(macId, messageId) }
+    }
+
+    fun cancelIncomingDownload(messageId: String) {
+        scope.launch {
+            val message = messages.get(messageId) ?: return@launch
+            if (message.direction != "incoming" || message.type != "chat.file") return@launch
+            if (message.transferState == "complete" || message.transferState == "cancelled") return@launch
+            manualDownloadCancels.add(messageId)
+            val activeJob = downloadJobs.remove(messageId)
+            if (activeJob == null) {
+                messages.setTransfer(messageId, "cancelled", message.localPath)
+                manualDownloadCancels.remove(messageId)
+            } else {
+                activeJob.cancel(CancellationException("download cancelled manually"))
+            }
+        }
     }
 
     fun sendFile(macId: String, uri: android.net.Uri, name: String, mime: String) {
@@ -373,15 +391,7 @@ class ConnectionManager(
             }
         }
         messages.pendingUploads(mac.id).forEach { uploadFile(mac, it) }
-        messages.pendingDownloads(mac.id).forEach {
-            try {
-                downloadFile(mac, it.blob, it.name, it.id, it.size, webSocket)
-            } catch (error: IOException) {
-                messages.setTransfer(it.id, "failed: ${error.message ?: "network error"}", "")
-            } catch (error: IllegalStateException) {
-                messages.setTransfer(it.id, "failed: ${error.message ?: "download error"}", "")
-            }
-        }
+        messages.pendingDownloads(mac.id).forEach { startIncomingDownload(mac, it, webSocket) }
     }
 
     private suspend fun receiveMessage(mac: PairedMac, message: JSONObject, webSocket: WebSocket) {
@@ -404,22 +414,60 @@ class ConnectionManager(
                 size = message.optLong("size"),
                 blob = message.optString("blob"),
                 delivered = true,
-                transferState = if (type == "chat.file") "downloading" else "",
+                transferState = if (type == "chat.file") "queued" else "",
             ),
         )
         webSocket.send(JSONObject().put("v", 1).put("type", "ack").put("id", id).toString())
         if (type == "chat.file" && inserted != -1L) {
+            startIncomingDownload(
+                mac,
+                ChatMessage(
+                    id = id,
+                    macId = mac.id,
+                    direction = "incoming",
+                    type = "chat.file",
+                    timestamp = message.optLong("ts", System.currentTimeMillis()),
+                    name = message.optString("name"),
+                    mime = message.optString("mime"),
+                    size = message.optLong("size"),
+                    blob = message.optString("blob"),
+                ),
+                webSocket,
+            )
+        }
+    }
+
+    private fun startIncomingDownload(mac: PairedMac, message: ChatMessage, webSocket: WebSocket) {
+        if (downloadJobs[message.id]?.isActive == true) return
+        val downloadJob = scope.launch {
             try {
-                    downloadFile(
-                        mac, message.optString("blob"), message.optString("name"),
-                        id, message.optLong("size"), webSocket,
-                    )
+                downloadFile(mac, message.blob, message.name, message.id, message.size, webSocket)
+            } catch (error: CancellationException) {
+                val path = messages.get(message.id)?.localPath.orEmpty()
+                if (manualDownloadCancels.remove(message.id)) {
+                    messages.setTransfer(message.id, "cancelled", path)
+                } else {
+                    messages.setTransfer(message.id, "failed: download interrupted", path)
+                }
+                throw error
             } catch (error: IOException) {
-                messages.setTransfer(id, "failed: ${error.message ?: "network error"}", "")
+                messages.setTransfer(
+                    message.id,
+                    "failed: ${error.message ?: "network error"}",
+                    messages.get(message.id)?.localPath.orEmpty(),
+                )
             } catch (error: IllegalStateException) {
-                messages.setTransfer(id, "failed: ${error.message ?: "download error"}", "")
+                messages.setTransfer(
+                    message.id,
+                    "failed: ${error.message ?: "download error"}",
+                    messages.get(message.id)?.localPath.orEmpty(),
+                )
+            } finally {
+                downloadJobs.remove(message.id)
+                manualDownloadCancels.remove(message.id)
             }
         }
+        downloadJobs[message.id] = downloadJob
     }
 
     private suspend fun uploadFile(mac: PairedMac, message: ChatMessage) {
@@ -509,6 +557,7 @@ class ConnectionManager(
             val directory = File(downloads, "PortNoir").apply { mkdirs() }
             val file = File(directory, blobId + "-" + File(name).name)
             val offset = if (file.exists()) file.length() else 0L
+            messages.setTransfer(messageId, "downloading", file.absolutePath)
             val request = Request.Builder().url(transferUrl(mac, blobId))
                 .header("X-Device-ID", repo.deviceId)
                 .header("Authorization", "Bearer ${mac.key}")

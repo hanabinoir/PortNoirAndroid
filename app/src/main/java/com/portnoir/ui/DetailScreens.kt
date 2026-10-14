@@ -383,6 +383,9 @@ fun ChatHistoryScreen(macId: String, onBack: () -> Unit) {
                         message,
                         onImageClick = { file -> preview = ImagePreview(file, message.mime) },
                         onFileClick = { fileActionsMessage = it },
+                        onCancelDownload = {
+                            app.connections.cancelIncomingDownload(it.id)
+                        },
                     )
                 }
             }
@@ -611,6 +614,7 @@ private fun ChatBubble(
     message: ChatMessage,
     onImageClick: (File) -> Unit,
     onFileClick: (ChatMessage) -> Unit,
+    onCancelDownload: (ChatMessage) -> Unit,
 ) {
     val context = LocalContext.current
     val outgoing = message.direction == "outgoing"
@@ -619,6 +623,8 @@ private fun ChatBubble(
         imageFile.isFile && (outgoing || message.transferState == "complete")
     val openable = message.type == "chat.file" && message.localPath.isNotEmpty() &&
         (outgoing || message.transferState == "complete")
+    val incomingDownloadInProgress = !outgoing && message.type == "chat.file" &&
+        (message.transferState == "queued" || message.transferState.startsWith("downloading"))
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start,
@@ -650,6 +656,14 @@ private fun ChatBubble(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (incomingDownloadInProgress) {
+                    TextButton(
+                        onClick = { onCancelDownload(message) },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    ) {
+                        Text("Cancel")
+                    }
+                }
             } else {
                 Text(message.body)
                 if (outgoing && !message.delivered) {

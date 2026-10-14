@@ -75,7 +75,7 @@ interface ChatMessageDao {
     @Query("SELECT * FROM chat_messages WHERE macId = :macId AND direction = 'outgoing' AND type = 'chat.file' AND transferState != 'complete'")
     suspend fun pendingUploads(macId: String): List<ChatMessage>
 
-    @Query("SELECT * FROM chat_messages WHERE macId = :macId AND direction = 'incoming' AND type = 'chat.file' AND transferState != 'complete'")
+    @Query("SELECT * FROM chat_messages WHERE macId = :macId AND direction = 'incoming' AND type = 'chat.file' AND (transferState = 'queued' OR transferState LIKE 'downloading%')")
     suspend fun pendingDownloads(macId: String): List<ChatMessage>
 }
 
