@@ -17,7 +17,7 @@
     <application
         android:name=".PortNoirApp"
         android:allowBackup="false"
-        android:icon="@android:drawable/sym_def_app_icon"
+        android:icon="@drawable/port_noir_512"
         android:label="PortNoir"
         android:theme="@style/Theme.PortNoir">
 
