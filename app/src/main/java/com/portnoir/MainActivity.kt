@@ -29,8 +29,13 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
         if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        if ((application as PortNoirApp).repo.macs.value.isNotEmpty()) ConnectionService.start(this)
         setContent { PortNoirTheme { PortNoirNav() } }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Re-kick the connection loops every time the app comes to the foreground.
+        if ((application as PortNoirApp).repo.macs.value.isNotEmpty()) ConnectionService.start(this)
     }
 }
 

@@ -1,5 +1,60 @@
-*.iml
-.gradle/
+# Built application files
+*.apk
+*.ap_
+*.aab
+
+# Files for the DEX VM / ART
+*.dex
+
+# Java class files
+*.class
+
+# Generated build artifacts
+bin/
+gen/
+out/
 build/
+/*/build/
+
+# Gradle files and cache
+.gradle/
+wrapper/dists/
+
+# Local configuration file (contains your local SDK path, etc.)
 local.properties
+
+# Log files
+*.log
+
+# Android Studio / IntelliJ files
+*.iml
 .idea/
+*.iws
+*.ipr
+
+# If you prefer to share certain IDE configurations (like code style),
+# you can track .idea/ but ignore user-specific files instead:
+# .idea/workspace.xml
+# .idea/tasks.xml
+# .idea/libraries/
+
+# Android Studio specialized tracking folders
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
+output-metadata.json
+
+# Kotlin-specific files
+.kotlin/
+
+# Keystore files (Never commit your production signing keys!)
+*.jks
+*.keystore
+
+# Google Services configuration (Uncomment if you use Firebase and want to keep your keys private)
+# google-services.json
+
+# OS-specific files
+.DS_Store
+Thumbs.db
