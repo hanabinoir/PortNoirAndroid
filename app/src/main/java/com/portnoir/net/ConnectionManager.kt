@@ -43,6 +43,7 @@ class ConnectionManager(
     private val jobs = ConcurrentHashMap<String, Job>()
     private val sockets = ConcurrentHashMap<String, WebSocket>()
     private val downloadJobs = ConcurrentHashMap<String, Job>()
+    private val uploadOwners = ConcurrentHashMap.newKeySet<String>()
     private val manualDownloadCancels = ConcurrentHashMap.newKeySet<String>()
     private var discoveryJob: Job? = null
 
@@ -120,7 +121,7 @@ class ConnectionManager(
             if (message.direction != "incoming" || message.type != "chat.file") return@launch
             if (message.transferState == "complete" || message.transferState == "cancelled") return@launch
             manualDownloadCancels.add(messageId)
-            val activeJob = downloadJobs.remove(messageId)
+            val activeJob = downloadJobs[messageId]
             if (activeJob == null) {
                 messages.setTransfer(messageId, "cancelled", message.localPath)
                 manualDownloadCancels.remove(messageId)
@@ -169,7 +170,7 @@ class ConnectionManager(
             )
             messages.insert(message)
             sockets[macId]?.send(messageJson(message).toString())
-            uploadFile(mac, message)
+            startUpload(mac, message)
         }
     }
 
@@ -228,7 +229,7 @@ class ConnectionManager(
             )
             messages.insert(message)
             sockets[macId]?.send(messageJson(message).toString())
-            uploadFile(mac, message)
+            startUpload(mac, message)
         }
     }
 
@@ -388,8 +389,20 @@ class ConnectionManager(
                 webSocket.send(messageJson(message).toString())
             }
         }
-        messages.pendingUploads(mac.id).forEach { uploadFile(mac, it) }
+        messages.pendingUploads(mac.id).forEach { startUpload(mac, it) }
         messages.pendingDownloads(mac.id).forEach { startIncomingDownload(mac, it, webSocket) }
+    }
+
+    private fun startUpload(mac: PairedMac, message: ChatMessage) {
+        if (!uploadOwners.add(message.id)) return
+        val job = scope.launch {
+            try {
+                uploadFile(mac, message)
+            } finally {
+                uploadOwners.remove(message.id)
+            }
+        }
+        job.invokeOnCompletion { uploadOwners.remove(message.id) }
     }
 
     private suspend fun receiveMessage(mac: PairedMac, message: JSONObject, webSocket: WebSocket) {
@@ -436,8 +449,7 @@ class ConnectionManager(
     }
 
     private fun startIncomingDownload(mac: PairedMac, message: ChatMessage, webSocket: WebSocket) {
-        if (downloadJobs[message.id]?.isActive == true) return
-        val downloadJob = scope.launch {
+        val downloadJob = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 downloadFile(mac, message.blob, message.name, message.id, message.size, webSocket)
             } catch (error: CancellationException) {
@@ -463,11 +475,16 @@ class ConnectionManager(
                     messages.get(message.id)?.localPath.orEmpty(),
                 )
             } finally {
-                downloadJobs.remove(message.id)
                 manualDownloadCancels.remove(message.id)
             }
         }
-        downloadJobs[message.id] = downloadJob
+        // The entry stays until the job completes, so a replacement cannot start while the old writer runs.
+        if (downloadJobs.putIfAbsent(message.id, downloadJob) != null) {
+            downloadJob.cancel()
+            return
+        }
+        downloadJob.invokeOnCompletion { downloadJobs.remove(message.id, downloadJob) }
+        downloadJob.start()
     }
 
     private suspend fun uploadFile(mac: PairedMac, message: ChatMessage) {
