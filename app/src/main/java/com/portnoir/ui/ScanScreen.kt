@@ -47,10 +47,11 @@ fun ScanScreen(onBack: () -> Unit) {
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
     LaunchedEffect(Unit) { if (!granted) launcher.launch(Manifest.permission.CAMERA) }
 
-    val wifi by rememberWifiConnected()
+val wifi by rememberWifiConnected()
+val currentWifi by rememberUpdatedState(wifi)
 
-    fun onCode(raw: String) {
-        if (!wifi) return
+fun onCode(raw: String) {
+    if (!currentWifi) return
         if (!busy.compareAndSet(false, true)) return
         val payload = PairingPayload.parse(raw)
         if (payload == null) {
