@@ -441,11 +441,13 @@ class ConnectionManager(
             try {
                 downloadFile(mac, message.blob, message.name, message.id, message.size, webSocket)
             } catch (error: CancellationException) {
-                val path = messages.get(message.id)?.localPath.orEmpty()
-                if (manualDownloadCancels.remove(message.id)) {
-                    messages.setTransfer(message.id, "cancelled", path)
-                } else {
-                    messages.setTransfer(message.id, "failed: download interrupted", path)
+                withContext(NonCancellable) {
+                    val path = messages.get(message.id)?.localPath.orEmpty()
+                    if (manualDownloadCancels.remove(message.id)) {
+                        messages.setTransfer(message.id, "cancelled", path)
+                    } else {
+                        messages.setTransfer(message.id, "failed: download interrupted", path)
+                    }
                 }
                 throw error
             } catch (error: IOException) {
