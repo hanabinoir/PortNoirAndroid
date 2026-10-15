@@ -32,7 +32,7 @@ class ConnectionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent != null) (application as PortNoirApp).connections.start()
+        (application as PortNoirApp).connections.start()
         return START_STICKY
     }
 

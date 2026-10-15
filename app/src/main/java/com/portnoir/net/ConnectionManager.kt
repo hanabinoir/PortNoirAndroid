@@ -136,11 +136,9 @@ class ConnectionManager(
             val blobId = UUID.randomUUID().toString().replace("-", "")
             val source = File(context.filesDir, "outgoing/$blobId").apply { parentFile?.mkdirs() }
             try {
-                context.contentResolver.openInputStream(uri).use { input ->
-                    requireNotNull(input) { "Cannot read the selected file" }.use { stream ->
-                        source.outputStream().use { output -> stream.copyTo(output) }
-                    }
-                }
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    source.outputStream().use { output -> stream.copyTo(output) }
+                } ?: throw IOException("Cannot read the selected file")
             } catch (error: IOException) {
                 messages.insert(ChatMessage(
                     id = blobId, macId = macId, direction = "outgoing", type = "chat.file",
@@ -518,8 +516,7 @@ class ConnectionManager(
                             offset = response.header("Upload-Offset")?.toLongOrNull()
                                 ?: response.body?.string()?.let {
                                     JSONObject(it).optLong("offset", offset + chunk.size)
-                                }
-                                ?: offset + chunk.size
+                                } ?: (offset + chunk.size)
                         }
                         messages.setTransfer(
                             message.id,
@@ -590,6 +587,9 @@ class ConnectionManager(
                         }
                     }
                 }
+            }
+            if (!file.isFile || file.length() != total) {
+                throw IOException("Download incomplete: expected $total bytes, received ${file.length()}")
             }
             messages.setTransfer(messageId, "complete", file.absolutePath)
         }
