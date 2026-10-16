@@ -14,6 +14,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.portnoir.net.ConnState
+import com.portnoir.net.rememberWifiConnected
 import com.portnoir.ui.theme.StatusBusy
 import com.portnoir.ui.theme.StatusOffline
 import com.portnoir.ui.theme.StatusOk
@@ -38,9 +39,27 @@ fun HomeScreen(onOpenChat: (String) -> Unit, onAddDevice: () -> Unit, onOpenSett
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            if (tab == 0) PortTab(onOpenChat, onAddDevice) else SettingsTab(onOpenSetting)
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            WifiOffBanner()
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                if (tab == 0) PortTab(onOpenChat, onAddDevice) else SettingsTab(onOpenSetting)
+            }
         }
+    }
+}
+
+/** Shown while Wi-Fi is off, since pairing and connecting both need the same local network as the Mac. */
+@Composable
+fun WifiOffBanner(modifier: Modifier = Modifier) {
+    val wifi by rememberWifiConnected()
+    if (wifi) return
+    Surface(modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.errorContainer) {
+        Text(
+            "Wi-Fi is off. Connect to the same Wi-Fi network as your Mac to pair or connect.",
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            style = MaterialTheme.typography.bodyMedium,
+        )
     }
 }
 
@@ -56,7 +75,7 @@ fun StatusDot(state: ConnState?) {
 
 fun ConnState?.label(): String = when (this) {
     ConnState.CONNECTED -> "Connected"
-    ConnState.DISCOVERING -> "Searching for your Mac"
+    ConnState.DISCOVERING -> "Searching for paired PCs"
     ConnState.CONNECTING -> "Connecting"
     ConnState.AUTHENTICATING -> "Signing in"
     else -> "Offline"

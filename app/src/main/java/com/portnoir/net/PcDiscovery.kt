@@ -5,13 +5,16 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.ConcurrentHashMap
 
-/** Looks for the Mac's mDNS advertisement (`_portnoir._tcp`) on the current Wi-Fi network. */
-class MacDiscovery(context: Context) {
+/** Looks for paired PCs' mDNS advertisements (`_portnoir._tcp`) on the current Wi-Fi network. */
+class PcDiscovery(context: Context) {
     private val nsd = context.getSystemService(Context.NSD_SERVICE) as NsdManager
 
-    suspend fun find(macId: String, timeoutMs: Long): Pair<String, Int>? {
-        val result = CompletableDeferred<Pair<String, Int>?>()
+    suspend fun findAll(macIds: Set<String>, timeoutMs: Long): Map<String, Pair<String, Int>> {
+        if (macIds.isEmpty()) return emptyMap()
+        val found = ConcurrentHashMap<String, Pair<String, Int>>()
+        val finished = CompletableDeferred<Unit>()
         val listener = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(serviceType: String) {}
             override fun onServiceFound(info: NsdServiceInfo) {
@@ -20,18 +23,21 @@ class MacDiscovery(context: Context) {
                     override fun onServiceResolved(info: NsdServiceInfo) {
                         val id = info.attributes["id"]?.toString(Charsets.UTF_8)
                         val host = info.host?.hostAddress
-                        if (id == macId && host != null) result.complete(host to info.port)
+                        if (id != null && id in macIds && host != null) found[id] = host to info.port
                     }
                 })
             }
             override fun onServiceLost(info: NsdServiceInfo) {}
             override fun onDiscoveryStopped(serviceType: String) {}
-            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) { result.complete(null) }
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                finished.complete(Unit)
+            }
             override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
         }
         nsd.discoverServices(Msg.SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
         try {
-            return withTimeoutOrNull(timeoutMs) { result.await() }
+            withTimeoutOrNull(timeoutMs) { finished.await() }
+            return found.toMap()
         } finally {
             runCatching { nsd.stopServiceDiscovery(listener) }
         }

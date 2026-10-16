@@ -28,6 +28,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.portnoir.PortNoirApp
 import com.portnoir.net.ConnectionService
 import com.portnoir.net.PairingPayload
+import com.portnoir.net.rememberWifiConnected
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -46,7 +47,11 @@ fun ScanScreen(onBack: () -> Unit) {
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
     LaunchedEffect(Unit) { if (!granted) launcher.launch(Manifest.permission.CAMERA) }
 
-    fun onCode(raw: String) {
+val wifi by rememberWifiConnected()
+val currentWifi by rememberUpdatedState(wifi)
+
+fun onCode(raw: String) {
+    if (!currentWifi) return
         if (!busy.compareAndSet(false, true)) return
         val payload = PairingPayload.parse(raw)
         if (payload == null) {
@@ -87,13 +92,17 @@ fun ScanScreen(onBack: () -> Unit) {
                 preview
             })
         }
+        WifiOffBanner(Modifier.align(Alignment.TopCenter).statusBarsPadding())
         Surface(
             modifier = Modifier.align(Alignment.BottomCenter).padding(24.dp).navigationBarsPadding(),
             shape = MaterialTheme.shapes.large,
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
         ) {
             Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(if (granted) status else "PortNoir needs the camera to scan the pairing code")
+                Text(
+                    if (granted) status else "PortNoir needs the camera to scan the pairing code",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 TextButton(onClick = onBack) { Text("Cancel") }
             }
         }

@@ -16,6 +16,7 @@ data class PairedMac(
     val key: String,
     val lastHost: String? = null,
     val lastPort: Int = 0,
+    val transferPort: Int = 0,
 )
 
 /** Persists this phone's identity and the paired Macs. TODO: move `key` to EncryptedSharedPreferences / Keystore. */
@@ -53,7 +54,8 @@ class DeviceRepository(context: Context) {
         val arr = JSONArray()
         _macs.value.forEach {
             arr.put(JSONObject().put("id", it.id).put("name", it.name).put("fp", it.fingerprint)
-                .put("key", it.key).put("host", it.lastHost ?: "").put("port", it.lastPort))
+                .put("key", it.key).put("host", it.lastHost ?: "").put("port", it.lastPort)
+                .put("transfer_port", it.transferPort))
         }
         prefs.edit().putString("macs", arr.toString()).apply()
     }
@@ -64,7 +66,7 @@ class DeviceRepository(context: Context) {
         return (0 until arr.length()).map {
             val o = arr.getJSONObject(it)
             PairedMac(o.getString("id"), o.getString("name"), o.getString("fp"), o.getString("key"),
-                o.optString("host").ifEmpty { null }, o.optInt("port"))
+                o.optString("host").ifEmpty { null }, o.optInt("port"), o.optInt("transfer_port"))
         }
     }
 }
